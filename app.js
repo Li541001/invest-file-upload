@@ -1,86 +1,115 @@
+require('dotenv').config(); // 載入 .env 設定
+
 const express = require('express');
 const mongoose = require('mongoose');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 
 const app = express();
-// Render 會自動分配 Port，如果在本地則用 3000
 const PORT = process.env.PORT || 3000;
-
-// 【重要】從環境變數讀取資料庫連線字串，如果沒有則嘗試連本地 (方便您測試)
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/xiaoyu_investment';
 
+// 1. 連接 MongoDB
 mongoose.connect(MONGO_URI)
-    .then(() => console.log('✅ MongoDB 連線成功'))
+    .then(() => {
+        console.log('✅ MongoDB 連線成功');
+        // 只有連線成功才啟動伺服器
+        app.listen(PORT, () => {
+            console.log(`🚀 伺服器運行於 Port ${PORT}`);
+        });
+    })
     .catch(err => console.error('❌ MongoDB 連線失敗:', err));
 
+// 2. 修改 Schema：加入 data (Buffer) 來存檔案內容
 const FileSchema = new mongoose.Schema({
     originalName: String,
-    filename: String,
-    path: String,
+    contentType: String, // 紀錄檔案類型 (例如 application/pdf)
+    data: Buffer,        // <--- 這裡就是真正的檔案內容
     uploadDate: { type: Date, default: Date.now }
 });
+
 const FileModel = mongoose.model('InvestmentFile', FileSchema);
 
-// 注意：Render 免費版硬碟是暫時的，重啟後檔案會消失。
-// 如果要永久存檔，通常會搭配 AWS S3 或 Cloudinary，但為了教學簡單我們維持原樣。
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadDir),
-    filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+// 3. 修改 Multer：使用記憶體儲存 (MemoryStorage)
+// 這樣 req.file.buffer 才會拿到資料
+const storage = multer.memoryStorage();
+const upload = multer({ 
+    storage: storage,
+    limits: { fileSize: 15 * 1024 * 1024 } // 限制 15MB (MongoDB 單一文件上限是 16MB)
 });
-const upload = multer({ storage: storage });
 
-const htmlContent = `
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>孝昱投資心得 - 雲端上傳版</title>
-    <style>
-        body { font-family: "Microsoft JhengHei", Arial, sans-serif; margin: 50px; background-color: #f4f4f4; text-align: center; }
-        .container { background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); max-width: 600px; margin: 0 auto; }
-        h1 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
-        form { display: flex; flex-direction: column; align-items: center; }
-        input[type="file"] { margin: 20px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; width: 80%; }
-        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background-color 0.3s; }
-        button:hover { background-color: #0056b3; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>孝昱投資心得 (雲端版)</h1>
-        <p>上傳您的 PDF 投資心得檔案。</p>
+// --- 路由設定 ---
+
+// 首頁：顯示上傳表單 + 已上傳的檔案列表
+app.get('/', async (req, res) => {
+    // 從資料庫撈出所有檔案的「名稱」和「ID」(不要撈 data，不然網頁會跑不動)
+    const files = await FileModel.find({}, 'originalName _id uploadDate').sort({ uploadDate: -1 });
+
+    const fileListHtml = files.map(file => `
+        <li style="margin: 10px 0; padding: 10px; background: #eee; border-radius: 5px; list-style: none;">
+            <span>📄 ${file.originalName}</span>
+            <a href="/file/${file._id}" target="_blank" style="margin-left: 10px; color: blue;">查看/下載</a>
+        </li>
+    `).join('');
+
+    const html = `
+    <!DOCTYPE html>
+    <html lang="zh-TW">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>孝昱投資心得</title>
+        <style>
+            body { font-family: "Microsoft JhengHei", sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; text-align: center; }
+            form { margin: 20px 0; padding: 20px; border: 2px dashed #ccc; }
+            ul { padding: 0; text-align: left; }
+        </style>
+    </head>
+    <body>
+        <h1>孝昱投資心得</h1>
+        
         <form action="/upload" method="post" enctype="multipart/form-data">
             <input type="file" name="pdfFile" accept="application/pdf" required>
-            <button type="submit">上傳檔案</button>
+            <button type="submit">上傳到資料庫</button>
         </form>
-    </div>
-</body>
-</html>
-`;
 
-app.get('/', (req, res) => res.send(htmlContent));
+        <h3>已上傳的檔案：</h3>
+        <ul>${fileListHtml || '<p>目前沒有檔案</p>'}</ul>
+    </body>
+    </html>
+    `;
+    res.send(html);
+});
 
+// 上傳路由：將 Buffer 存入 DB
 app.post('/upload', upload.single('pdfFile'), async (req, res) => {
     try {
-        if (!req.file) return res.send('請選擇檔案');
+        if (!req.file) return res.status(400).send('請選擇檔案');
+
+        // 建立新文件，將記憶體中的 buffer 存進去
         await FileModel.create({
             originalName: req.file.originalname,
-            filename: req.file.filename,
-            path: req.file.path
+            contentType: req.file.mimetype,
+            data: req.file.buffer 
         });
-        res.send(`<h2>✅ 上傳成功！已存入 MongoDB Atlas。</h2><a href="/">返回</a>`);
+
+        res.redirect('/'); // 上傳完直接回首頁
     } catch (error) {
         console.error(error);
-        res.status(500).send('伺服器錯誤');
+        res.status(500).send(`上傳失敗：檔案可能過大 (限制 16MB) 或資料庫錯誤`);
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`🚀 伺服器運行於 Port ${PORT}`);
+// 讀取路由：從 DB 撈出 Buffer 並還原成檔案
+app.get('/file/:id', async (req, res) => {
+    try {
+        const file = await FileModel.findById(req.params.id);
+        if (!file) return res.status(404).send('找不到檔案');
+
+        // 設定標頭，告訴瀏覽器這是一個 PDF
+        res.set('Content-Type', file.contentType);
+        // 將二進位資料送出
+        res.send(file.data);
+    } catch (error) {
+        res.status(500).send('讀取錯誤');
+    }
 });
