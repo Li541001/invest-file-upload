@@ -47,7 +47,7 @@ app.get('/', async (req, res) => {
     const fileListHtml = files.map(file => `
         <li style="margin: 10px 0; padding: 10px; background: #eee; border-radius: 5px; list-style: none;">
             <span>📄 ${file.originalName}</span>
-            <a href="/file/${file._id}" target="_blank" style="margin-left: 10px; color: blue;">查看/下載</a>
+            <a href="/file/${file._id}" target="_blank" style="margin-left: 10px; color: blue;">查看</a>
         </li>
     `).join('');
 
@@ -59,21 +59,28 @@ app.get('/', async (req, res) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>孝昱投資心得</title>
         <style>
-            body { font-family: "Microsoft JhengHei", sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; text-align: center; }
-            form { margin: 20px 0; padding: 20px; border: 2px dashed #ccc; }
+            body { font-family: "Microsoft JhengHei", Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; text-align: center;background-color: #f4f4f4;}
+            .container { background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); max-width: 600px; margin: 0 auto; }
+            form { display: flex; flex-direction: column; align-items: center; }
             ul { padding: 0; text-align: left; }
+            h3 {width: 150px;}
+            input[type="file"] { margin: 20px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; width: 80%; }
+            button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background-color 0.3s; }
         </style>
     </head>
     <body>
-        <h1>孝昱投資心得</h1>
-        
-        <form action="/upload" method="post" enctype="multipart/form-data">
-            <input type="file" name="pdfFile" accept="application/pdf" required>
-            <button type="submit">上傳到資料庫</button>
-        </form>
+        <div class="container">
+            <h1>孝昱投資心得</h1>
+            
+            <form action="/upload" method="post" enctype="multipart/form-data">
+                <input type="file" name="pdfFile" accept="application/pdf" required>
+                <button type="submit">上傳到資料庫</button>
+            </form>
+        </div>
 
-        <h3>已上傳的檔案：</h3>
-        <ul>${fileListHtml || '<p>目前沒有檔案</p>'}</ul>
+            <h3>已上傳的檔案：</h3>
+            <ul>${fileListHtml || '<p>目前沒有檔案</p>'}</ul>
+        
     </body>
     </html>
     `;
@@ -84,6 +91,7 @@ app.get('/', async (req, res) => {
 app.post('/upload', upload.single('pdfFile'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).send('請選擇檔案');
+        req.file.originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
 
         // 建立新文件，將記憶體中的 buffer 存進去
         await FileModel.create({
